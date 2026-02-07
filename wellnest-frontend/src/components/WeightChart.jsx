@@ -11,12 +11,16 @@ export default function WeightChart({ onLogSuccess }) {
     const fetchData = async () => {
         try {
             const res = await api.get('/health/weight');
-            const formatted = res.data.map(d => ({
-                date: new Date(d.date).toLocaleDateString(),
-                weight: d.weight,
-                fullDate: d.date,
-            })).reverse();
-            setData(formatted);
+            if (Array.isArray(res.data)) {
+                const formatted = res.data.map(d => ({
+                    date: new Date(d.date).toLocaleDateString(),
+                    weight: d.weight,
+                    fullDate: d.date,
+                })).reverse();
+                setData(formatted);
+            } else {
+                setData([]);
+            }
         } catch (e) {
             console.error(e);
         }

@@ -10,7 +10,8 @@ export const AuthProvider = ({ children }) => {
     useEffect(() => {
         const token = localStorage.getItem('token');
         if (token) {
-            setUser({ token });
+            // Decoded token would be better, but for now consistent object shape is key
+            setUser({ token, email: 'User' }); // Placeholder email until we have a /me endpoint or decode JWT
         }
         setLoading(false);
     }, []);

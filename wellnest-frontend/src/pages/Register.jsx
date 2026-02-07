@@ -16,7 +16,7 @@ export default function Register() {
             await register(email, password);
             navigate('/');
         } catch (e) {
-            setError('Registration failed. Email might be taken.');
+            setError(e.response?.data?.detail || 'Registration failed. Email might be taken.');
         }
     };
 
