@@ -33,37 +33,60 @@ class FoodSearchResult:
 
 class FatSecretClient:
     """
-    FatSecret API Client using OAuth 1.0a
-
+    FatSecret API Client using OAuth 2.0
+    
     Register for API keys at: https://platform.fatsecret.com/api/
     """
 
     BASE_URL = "https://platform.fatsecret.com/rest/server.api"
+    TOKEN_URL = "https://oauth.fatsecret.com/connect/token"
 
     def __init__(self):
         self.consumer_key = os.getenv("FATSECRET_CONSUMER_KEY", "")
         self.consumer_secret = os.getenv("FATSECRET_CONSUMER_SECRET", "")
+        self._access_token = None
+        self._token_expires_at = 0
 
-    def _generate_oauth_signature(self, method: str, url: str, params: dict) -> str:
-        """Generate OAuth 1.0a signature."""
-        # Sort parameters
-        sorted_params = sorted(params.items())
-        param_string = urllib.parse.urlencode(sorted_params)
+    def _get_access_token(self) -> Optional[str]:
+        """Get or refresh OAuth 2.0 access token."""
+        if not self.consumer_key or not self.consumer_secret:
+            return None
 
-        # Create signature base string
-        signature_base = f"{method}&{urllib.parse.quote(url, safe='')}&{urllib.parse.quote(param_string, safe='')}"
+        # Return existing token if valid (with 60s buffer)
+        if self._access_token and time.time() < self._token_expires_at - 60:
+            return self._access_token
 
-        # Create signing key
-        signing_key = f"{urllib.parse.quote(self.consumer_secret, safe='')}&"
-
-        # Generate HMAC-SHA1 signature
-        signature = hmac.new(
-            signing_key.encode('utf-8'),
-            signature_base.encode('utf-8'),
-            hashlib.sha1
-        ).digest()
-
-        return base64.b64encode(signature).decode('utf-8')
+        try:
+            # Basic Auth header for token request
+            credentials = f"{self.consumer_key}:{self.consumer_secret}"
+            auth_header = base64.b64encode(credentials.encode()).decode()
+            
+            headers = {
+                "Authorization": f"Basic {auth_header}",
+                "Content-Type": "application/x-www-form-urlencoded"
+            }
+            
+            data = {
+                "grant_type": "client_credentials",
+                "scope": "basic"
+            }
+            
+            with httpx.Client() as client:
+                response = client.post(self.TOKEN_URL, headers=headers, data=data)
+                
+                if response.status_code == 200:
+                    token_data = response.json()
+                    self._access_token = token_data.get("access_token")
+                    expires_in = token_data.get("expires_in", 86400)
+                    self._token_expires_at = time.time() + expires_in
+                    return self._access_token
+                else:
+                    print(f"Failed to get access token: {response.text}")
+                    return None
+                    
+        except Exception as e:
+            print(f"Error getting access token: {e}")
+            return None
 
     def _make_request(self, method_name: str, extra_params: dict = None) -> dict:
         """Make authenticated request to FatSecret API."""
@@ -71,26 +94,33 @@ class FatSecretClient:
             # Return mock data if no API keys
             return self._get_mock_response(method_name, extra_params)
 
+        token = self._get_access_token()
+        if not token:
+            print("No access token available, falling back to mock data")
+            return self._get_mock_response(method_name, extra_params)
+
         params = {
             "method": method_name,
             "format": "json",
-            "oauth_consumer_key": self.consumer_key,
-            "oauth_signature_method": "HMAC-SHA1",
-            "oauth_timestamp": str(int(time.time())),
-            "oauth_nonce": hashlib.md5(str(time.time()).encode()).hexdigest(),
-            "oauth_version": "1.0",
         }
 
         if extra_params:
             params.update(extra_params)
 
-        # Generate signature
-        params["oauth_signature"] = self._generate_oauth_signature("POST", self.BASE_URL, params)
+        headers = {
+            "Authorization": f"Bearer {token}"
+        }
 
         # Make request
         with httpx.Client() as client:
-            response = client.post(self.BASE_URL, data=params)
-            return response.json()
+            response = client.get(self.BASE_URL, params=params, headers=headers)
+            try:
+                if response.status_code == 200:
+                    return response.json()
+                else:
+                    return self._get_mock_response(method_name, extra_params)
+            except Exception:
+                return self._get_mock_response(method_name, extra_params)
 
     def _get_mock_response(self, method_name: str, extra_params: dict = None) -> dict:
         """Return mock data for development without API keys."""
