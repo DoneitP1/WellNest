@@ -116,10 +116,17 @@ class FatSecretClient:
             response = client.get(self.BASE_URL, params=params, headers=headers)
             try:
                 if response.status_code == 200:
-                    return response.json()
+                    result = response.json()
+                    # Check for API errors (like IP restriction)
+                    if "error" in result:
+                        print(f"FatSecret API error: {result['error']}")
+                        return self._get_mock_response(method_name, extra_params)
+                    return result
                 else:
+                    print(f"FatSecret API status {response.status_code}: {response.text}")
                     return self._get_mock_response(method_name, extra_params)
-            except Exception:
+            except Exception as e:
+                print(f"FatSecret API exception: {e}")
                 return self._get_mock_response(method_name, extra_params)
 
     def _get_mock_response(self, method_name: str, extra_params: dict = None) -> dict:

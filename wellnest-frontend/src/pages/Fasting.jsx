@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import api from '../api';
 import {
     Timer, Play, Square, Clock, Flame, Target,
-    TrendingUp, Award, Loader2, Check, History
+    TrendingUp, Award, Loader2, Check, History, Info
 } from 'lucide-react';
 
 export default function Fasting() {
@@ -12,9 +12,10 @@ export default function Fasting() {
     const [history, setHistory] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedType, setSelectedType] = useState('16:8');
-    const [timeRemaining, setTimeRemaining] = useState(null);
+    const [elapsedSeconds, setElapsedSeconds] = useState(0);
     const [starting, setStarting] = useState(false);
     const [ending, setEnding] = useState(false);
+    const intervalRef = useRef(null);
 
     const fastingTypes = [
         { value: '16:8', hours: 16, eating: 8, description: 'Most popular for beginners' },
@@ -25,17 +26,44 @@ export default function Fasting() {
 
     useEffect(() => {
         fetchData();
+        return () => {
+            if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+            }
+        };
     }, []);
 
+    // Real-time timer effect
     useEffect(() => {
-        if (currentFast?.is_active) {
-            const interval = setInterval(() => {
-                const remaining = currentFast.time_remaining_seconds - 1;
-                setTimeRemaining(remaining > 0 ? remaining : 0);
+        if (currentFast?.is_active && currentFast?.start_time) {
+            // Calculate initial elapsed time
+            const startTime = new Date(currentFast.start_time).getTime();
+            const now = Date.now();
+            const initialElapsed = Math.floor((now - startTime) / 1000);
+            setElapsedSeconds(initialElapsed);
+
+            // Clear any existing interval
+            if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+            }
+
+            // Start real-time counter
+            intervalRef.current = setInterval(() => {
+                setElapsedSeconds(prev => prev + 1);
             }, 1000);
-            return () => clearInterval(interval);
+
+            return () => {
+                if (intervalRef.current) {
+                    clearInterval(intervalRef.current);
+                }
+            };
+        } else {
+            setElapsedSeconds(0);
+            if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+            }
         }
-    }, [currentFast]);
+    }, [currentFast?.is_active, currentFast?.start_time]);
 
     const fetchData = async () => {
         try {
@@ -48,12 +76,15 @@ export default function Fasting() {
             setCurrentFast(currentRes.data);
             setStats(statsRes.data);
             setHistory(historyRes.data);
-
-            if (currentRes.data?.time_remaining_seconds) {
-                setTimeRemaining(currentRes.data.time_remaining_seconds);
-            }
         } catch (error) {
             console.error('Failed to fetch fasting data:', error);
+            // Set default values if API fails
+            setStats({
+                total_fasts: 0,
+                completed_fasts: 0,
+                total_hours_fasted: 0,
+                current_streak: 0
+            });
         } finally {
             setLoading(false);
         }
@@ -66,7 +97,7 @@ export default function Fasting() {
                 fasting_type: selectedType
             });
             setCurrentFast(response.data);
-            setTimeRemaining(response.data.time_remaining_seconds);
+            setElapsedSeconds(0);
         } catch (error) {
             alert(error.response?.data?.detail || 'Failed to start fast');
         } finally {
@@ -77,9 +108,9 @@ export default function Fasting() {
     const endFast = async () => {
         setEnding(true);
         try {
-            const response = await api.post('/fasting/end', {});
+            await api.post('/fasting/end', {});
             setCurrentFast(null);
-            setTimeRemaining(null);
+            setElapsedSeconds(0);
             fetchData(); // Refresh stats
         } catch (error) {
             alert(error.response?.data?.detail || 'Failed to end fast');
@@ -96,9 +127,26 @@ export default function Fasting() {
         return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     };
 
-    const getProgress = () => {
+    const getTargetSeconds = () => {
         if (!currentFast) return 0;
-        return Math.min(100, currentFast.progress_percentage);
+        const type = fastingTypes.find(t => t.value === currentFast.fasting_type);
+        return (type?.hours || 16) * 3600;
+    };
+
+    const getProgress = () => {
+        const targetSeconds = getTargetSeconds();
+        if (!targetSeconds) return 0;
+        return Math.min(100, (elapsedSeconds / targetSeconds) * 100);
+    };
+
+    const getTimeRemaining = () => {
+        const targetSeconds = getTargetSeconds();
+        const remaining = targetSeconds - elapsedSeconds;
+        return remaining > 0 ? remaining : 0;
+    };
+
+    const isCompleted = () => {
+        return elapsedSeconds >= getTargetSeconds();
     };
 
     if (loading) {
@@ -151,12 +199,12 @@ export default function Fasting() {
                                         cy="128"
                                         r="110"
                                         fill="none"
-                                        stroke="url(#gradient)"
+                                        stroke={isCompleted() ? "#22c55e" : "url(#gradient)"}
                                         strokeWidth="12"
                                         strokeLinecap="round"
                                         strokeDasharray={691.15}
                                         strokeDashoffset={691.15 - (691.15 * getProgress()) / 100}
-                                        className="transition-all duration-1000"
+                                        className="transition-all duration-300"
                                     />
                                     <defs>
                                         <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -168,14 +216,34 @@ export default function Fasting() {
 
                                 {/* Timer Display */}
                                 <div className="absolute inset-0 flex flex-col items-center justify-center">
-                                    <p className="text-sm text-slate-400 mb-1">Time Remaining</p>
-                                    <p className="text-4xl font-mono font-bold">
-                                        {formatTime(timeRemaining)}
-                                    </p>
-                                    <p className="text-lg text-teal-400 mt-2">
-                                        {getProgress().toFixed(1)}%
-                                    </p>
+                                    {isCompleted() ? (
+                                        <>
+                                            <Check className="w-12 h-12 text-green-500 mb-2" />
+                                            <p className="text-lg text-green-400 font-bold">Goal Reached!</p>
+                                            <p className="text-3xl font-mono font-bold mt-1">
+                                                {formatTime(elapsedSeconds)}
+                                            </p>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <p className="text-sm text-slate-400 mb-1">Time Remaining</p>
+                                            <p className="text-4xl font-mono font-bold">
+                                                {formatTime(getTimeRemaining())}
+                                            </p>
+                                            <p className="text-lg text-teal-400 mt-2">
+                                                {getProgress().toFixed(1)}%
+                                            </p>
+                                        </>
+                                    )}
                                 </div>
+                            </div>
+
+                            {/* Elapsed time display */}
+                            <div className="bg-white/10 rounded-xl p-3 mb-4">
+                                <p className="text-sm text-slate-400">Fasting for</p>
+                                <p className="text-2xl font-mono font-bold text-teal-400">
+                                    {formatTime(elapsedSeconds)}
+                                </p>
                             </div>
 
                             <p className="text-slate-400 text-sm">
@@ -188,14 +256,20 @@ export default function Fasting() {
                             <button
                                 onClick={endFast}
                                 disabled={ending}
-                                className="mt-6 flex items-center gap-2 px-8 py-3 bg-red-500 hover:bg-red-600 rounded-xl font-semibold mx-auto transition disabled:opacity-50"
+                                className={`mt-6 flex items-center gap-2 px-8 py-3 rounded-xl font-semibold mx-auto transition disabled:opacity-50 ${
+                                    isCompleted()
+                                        ? 'bg-green-500 hover:bg-green-600'
+                                        : 'bg-red-500 hover:bg-red-600'
+                                }`}
                             >
                                 {ending ? (
                                     <Loader2 className="w-5 h-5 animate-spin" />
+                                ) : isCompleted() ? (
+                                    <Check size={20} />
                                 ) : (
                                     <Square size={20} />
                                 )}
-                                End Fast
+                                {isCompleted() ? 'Complete Fast' : 'End Fast Early'}
                             </button>
                         </div>
                     </>
@@ -258,7 +332,7 @@ export default function Fasting() {
                             <span className="text-sm">Total Fasts</span>
                         </div>
                         <p className="text-2xl font-bold text-slate-800 dark:text-white">
-                            {stats.total_fasts}
+                            {stats.total_fasts || 0}
                         </p>
                     </div>
 
@@ -268,7 +342,7 @@ export default function Fasting() {
                             <span className="text-sm">Completed</span>
                         </div>
                         <p className="text-2xl font-bold text-green-500">
-                            {stats.completed_fasts}
+                            {stats.completed_fasts || 0}
                         </p>
                     </div>
 
@@ -278,7 +352,7 @@ export default function Fasting() {
                             <span className="text-sm">Total Hours</span>
                         </div>
                         <p className="text-2xl font-bold text-teal-500">
-                            {stats.total_hours_fasted}h
+                            {stats.total_hours_fasted || 0}h
                         </p>
                     </div>
 
@@ -288,11 +362,27 @@ export default function Fasting() {
                             <span className="text-sm">Streak</span>
                         </div>
                         <p className="text-2xl font-bold text-orange-500">
-                            {stats.current_streak} 🔥
+                            {stats.current_streak || 0} 🔥
                         </p>
                     </div>
                 </div>
             )}
+
+            {/* Info Card */}
+            <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="bg-blue-50 dark:bg-blue-500/10 rounded-xl p-4 flex gap-3"
+            >
+                <Info className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" />
+                <div className="text-sm text-blue-700 dark:text-blue-300">
+                    <p className="font-medium mb-1">Benefits of Intermittent Fasting</p>
+                    <p className="text-blue-600 dark:text-blue-400">
+                        IF can help with weight loss, improved insulin sensitivity, cellular repair (autophagy),
+                        and mental clarity. Start with 16:8 and gradually increase your fasting window.
+                    </p>
+                </div>
+            </motion.div>
 
             {/* Fasting History */}
             <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
@@ -338,7 +428,7 @@ export default function Fasting() {
                                             className={`h-full rounded-full ${
                                                 fast.completed ? 'bg-green-500' : fast.cancelled ? 'bg-red-500' : 'bg-teal-500'
                                             }`}
-                                            style={{ width: `${fast.progress_percentage}%` }}
+                                            style={{ width: `${Math.min(fast.progress_percentage || 0, 100)}%` }}
                                         />
                                     </div>
                                 </div>
